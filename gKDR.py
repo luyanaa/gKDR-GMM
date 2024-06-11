@@ -4,7 +4,7 @@ def MedianDist(X):
     N = X.shape[0]
     ab = X * X.transpose(0, 1) 
     aa = numpy.diag(ab)
-    Dx = aa.repeat(1,N) + aa.transpose( 0, 1).repeat(N, 1) - 2 * ab
+    Dx = aa.repeat(1,N) + aa.transpose(0, 1).repeat(N, 1) - 2 * ab
     Dx = Dx- numpy.diag(numpy.diag(Dx))
     dx=numpy.nonzero(numpy.reshape(Dx,N*N,1))
     return numpy.sqrt(numpy.median(dx))
@@ -50,7 +50,7 @@ def chol_inc_gauss(x,sigma,tol):
     G = [G,numpy.zeros((n,1))]
     # find best new element
     if i>1 :
-        diagmax,jast=numpy.max(diagG[i:n])
+        _, jast=numpy.max(diagG[i:n])
         jast=jast+i-1
         # updates permutation
         Pvec[[i, jast]] = Pvec[[jast,i]]

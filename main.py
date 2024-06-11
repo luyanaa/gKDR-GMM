@@ -1,6 +1,5 @@
 # Translated by Robin Lu to Python, with certain change/improvement. 
 # Should not be taken as equvilant of original gKDR-GMM paper. 
-import torch
 import scipy.signal
 import numpy
 import pandas as pd
@@ -37,9 +36,9 @@ parser = argparse.ArgumentParser(
                     description='An improvement of Toyoshima et al. (2023)',
                     epilog='Under Development')
 
-sampleID = parser.add_argument('sampleID', type=int) 
-data_folder = parser.add_argument('data_folder', type=str) 
-metadata_folder = parser.add_argument('metadata_folder', type=str) 
+sampleID = 1
+data_folder = "./cleandata_smoothened2"
+metadata_folder = "./metadata" 
 # Preset Parameters
 
 link = 'indirect'
@@ -60,7 +59,7 @@ autocorrthreshold = 0.3
 autocorrlag = 20
 data = pd.read_csv(os.path.join(data_folder, str(sampleID)+'_ratio.csv'));
 uniqNames = pd.read_csv(os.path.join(data_folder, str(sampleID)+'_uniqNames.csv'),header=None)    
-rall = numpy.diag(scipy.signal.correlate(data[1+autocorrlag:-1,:],data[1:-1-autocorrlag,:]))
+rall = numpy.diag(numpy.corrcoef(data[1+autocorrlag:-1],data[1:-1-autocorrlag]))
 targetcells = numpy.where(rall > autocorrthreshold)
 targetcellnames = uniqNames[targetcells]
 targetcells = []
@@ -85,6 +84,12 @@ print("n is ", n)
 train_span = [1, n]
 test_span = []
         
+def generatesalt(n, startframe, period):
+    x = numpy.arange(1, n+1, 1) - startframe
+    y = numpy.dot(numpy.math.epower(numpy.abs(numpy.sin(x/period*numpy.pi)), 0.25), numpy.sign(numpy.sin(x/period*numpy.pi)))
+    y[1:numpy.floor(startframe)] = 0
+    return y
+
 if use_salt_input:
     salttable = pd.read_csv(os.path.join(metadata_folder, 'stimulation_timing.csv'),header=1) 
     startframe = salttable[sampleID,3]
@@ -99,8 +104,44 @@ if use_salt_input:
     sourcedata = [saltdata[1:n].transpose(0,1), data[:,targetcells]]
 else:
     sourcedata = data[:,targetcells]
-print(sourcedata.shape)
-        
+# print(sourcedata.shape)
+# [source_train, target_train, source_test, target_test] = ...
+def embed4D(source_data, target_data, train_span, test_span, embed_step, embed_before, time_step, nahead):
+    embed_size = embed_before + 1
+    M = source_data.shape[1] # number of time series used for source signal
+    # set embedded data: source_train, target_train
+    # columns for source_train: data1(t-embed_before*embed_step),,,,,, data1(t),data2(t-embed_before*embed_step),,,,,, data2(t),
+    start_ind = train_span[0] + embed_before * embed_step
+    end_ind = train_span[1] - nahead
+    ind_seq = numpy.arange(start=start_ind, stop=end_ind+time_step, step=time_step) # sequence of time indices to pick up for training
+    source_train = numpy.zeros((ind_seq.shape[0], embed_size*M))
+    source_train[:,:] = numpy.nan
+    columns = numpy.arange(start=1, step=embed_size, stop=(1+embed_size*(M-1))+embed_size)
+    for shift in range((-embed_before)*embed_step, embed_step, embed_step):
+        print('shift = ', str(shift))
+        source_train[:, columns] = source_data[ind_seq + shift, :]   # from old to now
+        columns = columns + 1 # add to each column number
+    target_train = target_data[ind_seq+nahead,:]
+    if test_span.shape[0] < 2:
+        source_test = []
+        target_test = []
+    else:
+        start_ind = test_span[0] + embed_before * embed_step
+        end_ind = test_span[1] - nahead;
+        print(start_ind, end_ind)
+
+        ind_seq = numpy.arange(start=start_ind,stop=end_ind+time_step, step=time_step) # sequence of time indices to pick up
+        source_test = numpy.zeros((ind_seq.shape[0], embed_size*M))
+        source_test[:,:] = numpy.nan
+        columns = numpy.arange(start=1, step=embed_size, stop=(1+embed_size*(M)))
+        # embed
+        for shift in range((-embed_before*embed_step), embed_step , embed_step):
+            print('shift = ', str(shift))
+            source_test[:, columns] = source_data[ind_seq + shift, :]
+            columns = columns + 1
+        target_test = target_data[ind_seq+nahead,:]
+    return source_train, target_train, source_test, target_test
+
 source_train_all, target_train_all, _, _ = embed4D(sourcedata, data[:,targetcells], train_span, test_span, embed_step, embed_before, time_step, nahead)
 print('end of embedding')
 
@@ -135,8 +176,8 @@ for targeti in range(targetcells):
     sourcecellnames = targetcellnames[seli]
                     
     if use_salt_input and numpy.any(saltsensors == targetcellname):
-        seli = [seli(1) 0 seli(2:end)];
-        sourcecellnames = [sourcecellnames(1); {'salt'}; sourcecellnames(2:end)];
+        seli = [seli[0],0,seli[1:-1]]
+        sourcecellnames = [sourcecellnames[0], 'salt', sourcecellnames[1:-1]]
     
     print('sample ', str(sampleID), ' target ',targetcellname, ', No of linked neurons = ', str(len(selc)-1) )
     print('number of presynaptic on connectome: ', str(numpy.sum(multiconmatrix[:,cellc] == 1)-1));
@@ -175,34 +216,33 @@ for targeti in range(targetcells):
     model[targeti] = grid_search
 
 # Freerun test.
-freerun_length = 10000 # number of time_step's to perform freerun prediction
-freerun_repeat = 3
+# freerun_length = 10000 # number of time_step's to perform freerun prediction
+# freerun_repeat = 3
 
-freerun_start = train_span[1]+1
-freestart = freerun_start
-if freestart > n+1:
-    freestart = n+1
+#freerun_start = train_span[1]+1
+# freestart = freerun_start
+#if freestart > n+1:
+#    freestart = n+1
         
 
-Tc_real = numpy.arange(train_span[0], (freestart-1), time_step) # sequence of time indices for real data before freerun
-Tc_all = numpy.arange(train_span[0],(freestart+freerun_length), time_step)
+#Tc_real = numpy.arange(train_span[0], (freestart-1)+time_step, time_step) # sequence of time indices for real data before freerun
+#Tc_all = numpy.arange(train_span[0],(freestart+freerun_length)+time_step, time_step)
+#nx = Tc_all.shape[0]    # Tc_all from saveddata  XXXXXXXXXXX
+#nc = Tc_real.shape[0]    # Tc_real from saveddata  XXXXXXXXXXX
+#print('Freerun prediction')
+#embed_time_step = embed_step/time_step # embed_stepがtime_step単位でいくつか
+#ahead_time_step = nahead/time_step # naheadがtime_step単位でいくつか
         
-print('Freerun prediction')
-embed_time_step = embed_step/time_step # embed_stepがtime_step単位でいくつか
-ahead_time_step = nahead/time_step # naheadがtime_step単位でいくつか
-        
-real_predict_set = cell(1,freerun_repeat);
-        
-for testi in range(freerun_repeat):        
-    print('repeat ', str(testi))
-    real_predict = numpy.nan((len(Tc_all),len(targetcells)+1-selistart)) # add if salt input            
+#for testi in range(freerun_repeat):        
+#    print('repeat ', str(testi))
+#    real_predict = numpy.nan((len(Tc_all),len(targetcells)+1-selistart)) # add if salt input            
     # put real data at the begining of real_predict
-    real_predict[1:len(Tc_real), 1-selistart+(1:len(targetcells))] = data[Tc_real, targetcells]
-    if use_salt_input:
-        real_predict(1:len(Tc_all),1) = saltdata(Tc_all); # salt input      %%% saltdata from modeldata   
+#    real_predict[1:len(Tc_real), 1-selistart+(1:len(targetcells))] = data[Tc_real, targetcells]
+#    if use_salt_input:
+#        real_predict(1:len(Tc_all),1) = saltdata(Tc_all); # salt input      %%% saltdata from modeldata   
         # freerun prediction
-        for ti in range(1,(nx-nc)+1):
-            for targeti in range(len(targetcells))
-                source_for_predict = (numpy.reshape(real_predict((nc+ti-ahead_time_step-embed_time_step*embed_before):embed_time_step:(nc+ti-ahead_time_step), selicell{targeti}+1-selistart),[],1) )';  %nc+tiをpredictしたいので、そこからnaheadもどったところがembedの終点になる
-                predict_ahead = GMMpredict(source_for_predict, model[targeti], B);
-                real_predict(nc+ti, targeti+1-selistart) = predict_ahead;
+#        for ti in range(1,(nx-nc)+1):
+#            for targeti in range(len(targetcells)):
+#                source_for_predict = numpy.reshape(real_predict(numpy.arange(start=(nc+ti-ahead_time_step-embed_time_step*embed_before),step=embed_time_step, stop=(nc+ti-ahead_time_step)+embed_time_step), selicell{targeti}+1-selistart),[],1).transpose() #  nc+tiをpredictしたいので、そこからnaheadもどったところがembedの終点になる
+#                predict_ahead = GMMpredict(source_for_predict, model[targeti])
+#                real_predict[nc+ti, targeti+1-selistart] = predict_ahead
