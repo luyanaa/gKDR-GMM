@@ -1,142 +1,63 @@
-import numpy
+import torch
+from torch import nn
+import sys
+from torch.nn.functional import pdist
+from scipy.spatial.distance import squareform
 
-def MedianDist(X):
-    N = X.shape[0]
-    ab = X * X.transpose(0, 1) 
-    aa = numpy.diag(ab)
-    Dx = aa.repeat(1,N) + aa.transpose(0, 1).repeat(N, 1) - 2 * ab
-    Dx = Dx- numpy.diag(numpy.diag(Dx))
-    dx=numpy.nonzero(numpy.reshape(Dx,N*N,1))
-    return numpy.sqrt(numpy.median(dx))
+# Problem: gKDR only has Kexe as a resonable parameter here.
+class gKDR(nn.Module):
+    def __init__(self, X, Y, K, X_scale = 1.0, Y_scale = 1.0, EPS=1E-8, SGX=None, SGY=None):
+        # Assuming gKDR always on a 2-D matrix. 
+        N, M = torch.shape(X)
 
-# SQDIST - computes squared Euclidean distance matrix
-#          computes a rectangular matrix of pairwise distances
-# between points in A (given in columns) and points in B
+        assert(K >= 0 and K <= M)
+        assert(EPS >= 0)
+        assert(SGX is None or SGX > 0.0)
+        assert(SGY is None or SGY > 0.0)
 
-# NB: very fast implementation taken from Roland Bunschoten
+        Y = torch.reshape(Y, (N,1))
 
-def sqdist(a,b):
-    aa = numpy.sum(numpy.dot(a,a),1)
-    bb = numpy.sum(numpy.dot(b,b),1)
-    ab = numpy.dot(a.transpose(0,1), b)
-    d = numpy.abs(numpy.repeat(aa.transpose(0,1), [1, bb.shape[2]])+
-                  numpy.repeat(bb,[aa.shape[2],1]) - 2*ab)
-    return d
+        if SGX is None:
+            SGX = X_scale * torch.median(pdist(X))
+        if SGY is None:
+            SGY = Y_scale * torch.median(pdist(Y))
 
-# CHOL_INC_FUN - incomplete Cholesky decomposition of the Gram matrix defined
-#                by data x, with the Gaussiab kernel with width sigma
-#                Symmetric pivoting is used and the algorithms stops 
-#                when the sum of the remaining pivots is less than TOL.
+        I = torch.eye(N)
 
-# CHOL_INC returns returns an uPvecer triangular matrix G and a permutation 
-# matrix P such that P'*A*P=G*G'.
+        SGX2 = max(SGX*SGX, sys.float_info.min)
+        SGY2 = max(SGY*SGY, sys.float_info.min)
 
-# P is ONLY stored as a reordering vector PVEC such that 
-#                    A(Pvec,Pvec)= G*G' 
-# consequently, to find a matrix R such that A=R*R', you should do
-# [a,Pvec]=sort(Pvec); R=G(Pvec,:);
+        Kx = torch.exp(-0.5 * squareform(pdist(X, p=2)) / SGX2) 
+        Ky = torch.exp(-0.5 * squareform(pdist(Y, p=2)) / SGY2) 
 
-# Copyright (c) Francis R. Bach, 2002.
+        regularized_Kx = Kx + N*EPS*I
+        tmp = Ky * torch.linalg.inv(regularized_Kx)
+        F = (tmp.T * torch.linalg.inv(regularized_Kx)).T
 
-def chol_inc_gauss(x,sigma,tol):
-   n = x.shape[2] 
-   Pvec = numpy.linspace(1, n, 1)
-   I = []
-   # calculates diagonal elements (all equal to 1 for gaussian kernels)
-   diagG=numpy.ones((n,1))
-   i = 1 
-   G = []
-   while((sum(diagG[i:n])>tol)):
-    G = [G,numpy.zeros((n,1))]
-    # find best new element
-    if i>1 :
-        _, jast=numpy.max(diagG[i:n])
-        jast=jast+i-1
-        # updates permutation
-        Pvec[[i, jast]] = Pvec[[jast,i]]
-        # updates all elements of G due to new permutation
-        G[[i,jast],1:i]=G[[ jast,i],1:i]
-        # do the cholesky update
-    else: 
-       jast = 1
+        Dx = torch.reshape(torch.tile(X,(N,1)), (N,N,M), order='F').copy()
+        Xij = Dx - torch.transpose(Dx, (1,0,2))
+        Xij = Xij / SGX2
+        H = Xij * torch.tile(Kx[:,:,torch.newaxis], (1,1,M))
+
+        R = torch.zeros((M,M), order='F')
+
+        nabla_k = torch.reshape(H, (N,N*M), order='F')
+        Fm = torch.reshape(torch.matmul(F,nabla_k), (N,N,M), order='F')
+
+        for k in range(N):
+            R = R + torch.dot(H[k,:,:].T, Fm[k,:,:])
+
+        L, V = torch.linalg.eigh(R)
+
+        assert(torch.allclose(V.imag, 0.0))
+
+        idx = torch.argsort(L, 0)[::-1] # sort descending
+
+        # record B, along with some bookkeeping parameters
+        self.X_scale = X_scale
+        self.Y_scale = Y_scale
+        self.K = K
+        self.B = V[:, idx]
     
-    G[i,i]=numpy.sqrt(diagG[jast]) #A(Pvec(i),Pvec(i));
-    if i<n :
-    # calculates newAcol=A(Pvec((i+1):n),Pvec(i))
-        newAcol = numpy.exp(-.5/sigma^2*sqdist(x[:, Pvec[(i+1):n]]),x[:,Pvec[i]])
-        if (i>1):
-            G[(i+1):n,i]=1/G[i,i]*( newAcol - G[(i+1):n,1:(i-1)]*G[i,1:(i-1)].transpose())
-        else:
-            G[(i+1):n,i]=1/G[i,i] * newAcol;
-	#updates diagonal elements
-    if i<n: 
-        diagG[(i+1):n]=numpy.ones((n-i,1))-numpy.sum( numpy.dot(G[(i+1):n,1:i],G[(i+1):n,1:i] ),2 );
-   i=i+1
-   return G, Pvec
-
-
-
-#-----------------------------------------------
-# KernelDeriv() based on KernelDeriv() except using incomplete cholesky approximation to
-# solve memory problem.
-#
-# Arguments
-#  X:  explanatory variables (input data)
-#  Y:  response variables (teaching data)
-#  K:  dimension of effective subspaces
-#  SGX:  bandwidth (deviation) parameter in Gaussian kernel for X
-#  SGY:  bandwidth (deviation) parameter in Gaussian kernel for Y
-#  EPS:  regularization coefficient
-#
-# Return value(s)
-#  B:  orthonormal column vectors (M x K)
-#  t:  value of the objective function
-#  R:  estimated Mn (added by YI)
-# 
-#-----------------------------------------------
-
-def KernelDeriv_chol(X,Y,K,SGX,SGY,EPS):
-	N,M=numpy.shape(X)
-	tol=0.000001   # tolerance for incomplete cholesky approximation
-	I=numpy.eye(N)
-
-    # Calculate Gram matrix of X
-	sx2=2*SGX*SGX
-	ab=X*X.transpose(0,1)
-	aa=numpy.diag(ab)
-	D=numpy.repeat(aa,1,N)
-	xx=numpy.max(D + D.transpose(0,1) - 2*ab, numpy.zeros(N,N))
-	Kx=numpy.exp(numpy.div(-xx,sx2))
-
-	# Calculate Gram matrix of Y
-	sy2=2*SGY*SGY
-	ab=Y*Y.transpose(0,1)
-	aa=numpy.diag(ab)
-	D=numpy.repeat(aa,1,N)
-	yy=numpy.max(D +D.transpose(0,1) - 2*ab, numpy.zeros(N,N))
-	Ky=numpy.exp(numpy.div(-yy,sy2))
-	
-    #incomplete cholesky approximation of Ky
-	print('Execute chol_inc_gauss')
-	G, Pvec = chol_inc_gauss(Y.transpose(0,1),SGY,tol)
-	a, Pvec = numpy.sort(Pvec)
-	Ry = G[Pvec,:]
-	r = numpy.length(Ry[1,:])
-	Ty=numpy.div(Ry.transpose(0,1), (Kx+numpy.dot(numpy.matmul(N,EPS), numpy.eye(N))))
-	
-    # Derivative of k(X_i, x) w.r.t. x
-	print("Derivative of k(X_i, x")
-	Dx=numpy.reshape(numpy.repeat(X,N,1),(N,N,M))
-	Xij=Dx-numpy.permute(Dx,(2, 1, 3))
-	Xij=numpy.div(Xij,SGX)/SGX
-	H=numpy.dot(Xij, numpy.repeat(Kx,(1,1,M)))
-	print('Finished Derivative of k(X_i, x')
-    
-    # compute the matrix for gKDR
-	Hy=numpy.reshape(Ty*numpy.reshape(H,(N,N*M)), (r*N,M))
-	R=numpy.matmul(Hy.transpose(0,1), Hy)
-	V,L = numpy.linalg.eig(R)
-	e,idx=numpy.sort(numpy.diag(L),descending=True)
-	B=V[:,idx[1:K]]
-	t=numpy.sum(e[idx[1:K]])
-	return B, R, t, Kx
+    def forward(self, X):
+        return X @ self.B[:,0:self.K]
