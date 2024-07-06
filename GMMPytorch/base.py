@@ -14,7 +14,6 @@ class MixtureFamily(Enum):
     SHARED_ISOTROPIC = "shared_isotropic"  # same variance for all directions and components
     CONSTANT = "constant"                  # sigma is not learned
 
-
 class MixtureModel(ABC, torch.nn.Module):
     """
     Base model for mixture models
