@@ -7,8 +7,8 @@ from torch.distributions import (
     MixtureSameFamily
 )
 
-from base import MixtureModel
-from base import MixtureFamily
+from .base import MixtureModel
+from .base import MixtureFamily
 
 
 def make_random_cov_matrix(num_dims: int, observations_per_variable: int = 10) -> numpy.ndarray:

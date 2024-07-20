@@ -9,7 +9,7 @@ from torch.distributions import (
     MixtureSameFamily
 )
 
-from base import MixtureModel
+from .base import MixtureModel
 
 
 class GmmSharedIsotropic(MixtureModel):

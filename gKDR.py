@@ -4,11 +4,18 @@ import sys
 from torch.nn.functional import pdist
 from scipy.spatial.distance import squareform
 
+# Solving torch.reshape without "F"
+def reshape_fortran(x, shape):
+    if len(x.shape) > 0:
+        x = x.permute(*reversed(range(len(x.shape))))
+    return x.reshape(*reversed(shape)).permute(*reversed(range(len(shape))))
+
 # Problem: gKDR only has Kexe as a resonable parameter here.
 class gKDR(nn.Module):
     def __init__(self, X, Y, K, X_scale = 1.0, Y_scale = 1.0, EPS=1E-8, SGX=None, SGY=None):
         # Assuming gKDR always on a 2-D matrix. 
-        N, M = torch.shape(X)
+        super().__init__()
+        N, M = X.shape
 
         assert(K >= 0 and K <= M)
         assert(EPS >= 0)
@@ -27,31 +34,29 @@ class gKDR(nn.Module):
         SGX2 = max(SGX*SGX, sys.float_info.min)
         SGY2 = max(SGY*SGY, sys.float_info.min)
 
-        Kx = torch.exp(-0.5 * squareform(pdist(X, p=2)) / SGX2) 
-        Ky = torch.exp(-0.5 * squareform(pdist(Y, p=2)) / SGY2) 
+        Kx = torch.exp(-0.5 * squareform(pdist(X, p=2)) / SGX2)
+        Ky = torch.exp(-0.5 * squareform(pdist(Y, p=2)) / SGY2)
 
         regularized_Kx = Kx + N*EPS*I
         tmp = Ky * torch.linalg.inv(regularized_Kx)
         F = (tmp.T * torch.linalg.inv(regularized_Kx)).T
 
-        Dx = torch.reshape(torch.tile(X,(N,1)), (N,N,M), order='F').copy()
-        Xij = Dx - torch.transpose(Dx, (1,0,2))
+        Dx = torch.clone(reshape_fortran(torch.tile(X,(N,1)), (N,N,M)))
+        Xij = Dx - torch.transpose(Dx, 1,0)
         Xij = Xij / SGX2
-        H = Xij * torch.tile(Kx[:,:,torch.newaxis], (1,1,M))
+        H = Xij * torch.tile(Kx[:,:,None], (1,1,M))
 
-        R = torch.zeros((M,M), order='F')
+        R = torch.zeros((M,M))
+        R = R.t().contiguous().t()
 
-        nabla_k = torch.reshape(H, (N,N*M), order='F')
-        Fm = torch.reshape(torch.matmul(F,nabla_k), (N,N,M), order='F')
+        nabla_k = reshape_fortran(H, (N,N*M))
+        Fm = reshape_fortran(torch.matmul(F,nabla_k), (N,N,M))
 
         for k in range(N):
-            R = R + torch.dot(H[k,:,:].T, Fm[k,:,:])
+            R = R + torch.matmul(H[k,:,:].T, Fm[k,:,:])
 
         L, V = torch.linalg.eigh(R)
-
-        assert(torch.allclose(V.imag, 0.0))
-
-        idx = torch.argsort(L, 0)[::-1] # sort descending
+        idx = torch.argsort(L, dim=0, descending=True) # sort descending
 
         # record B, along with some bookkeeping parameters
         self.X_scale = X_scale
