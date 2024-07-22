@@ -9,6 +9,12 @@ from gKDR import gKDR
 from GMMPytorch import GmmDiagonal, GmmFull, GmmIsotropic, GmmSharedIsotropic
 import gpytorch
 
+# Logging stdout to log
+import sys
+orig_stdout = sys.stdout
+f = open('out.log', 'w')
+sys.stdout = f
+
 def unique(seq): # Order preserving
   ''' Modified version of Dave Kirby solution '''
   seen = set()
@@ -83,8 +89,11 @@ def objective(trial):
     component_lr = 0.05
     num_iterations = 100
     log_freq = 5
-    
+    ExpFilter_lr = 0.05
+    ExpFilter_Gamma = trial.suggest_float("ExpFilter_Gamma", 0.1, 0.5)
     # create separate optimizers for mixture coeficients and components
+    ExpFilter_optimizer = torch.optim.Adam(model.ExpFilter.parameters(), lr=ExpFilter_lr)
+    ExpFilter_scheduler = torch.optim.lr_scheduler.StepLR(ExpFilter_optimizer, step_size=num_iterations // 10, gamma=ExpFilter_Gamma)
     mixture_optimizer = [torch.optim.Adam(model.GMM[i].mixture_parameters(), lr=mixture_lr) for i in range(len(gKDR_List))]
     mixture_scheduler = [torch.optim.lr_scheduler.CosineAnnealingLR(mixture_optimizer[i], num_iterations) for i in range(len(gKDR_List))]
     components_optimizer = [torch.optim.Adam(model.GMM[i].component_parameters(), lr=component_lr) for i in range(len(gKDR_List))]
@@ -96,12 +105,17 @@ def objective(trial):
         for i in range(len(gKDR_List)):
             mixture_optimizer[i].zero_grad()
             components_optimizer[i].zero_grad()
+            ExpFilter_optimizer.zero_grad()
 
         # forward
         output = model(mat)
         loss = 0
         for i in range(len(gKDR_List)):
             loss = loss + output[i] 
+        trial.report(loss, iteration_index)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+
         loss.backward()
 
         # log and visualize
@@ -113,6 +127,8 @@ def objective(trial):
             mixture_scheduler[i].step()
             components_optimizer[i].step()
             components_scheduler[i].step()
+            ExpFilter_optimizer.step()
+            ExpFilter_scheduler.step()
             model.GMM[i].constrain_parameters()
 
     return loss.detach()
@@ -214,6 +230,13 @@ for sampleID in range(1, 2):
         source_train = data[:,seli]
         Y.append(torch.from_numpy(target_train))
         X.append(torch.from_numpy(source_train))
-        print(target_train.shape, source_train.shape)
-    study = optuna.create_study(sampler=optuna.samplers.TPESampler())
-    study.optimize(objective, n_trials=300)
+    study = optuna.create_study(sampler=optuna.samplers.TPESampler(), 
+                                pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=100, reduction_factor=3)
+                            )
+    study.optimize(objective, n_trials=500)
+
+# Redirect output back to stdout
+sys.stdout = orig_stdout
+f.close()
+
+
