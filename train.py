@@ -55,11 +55,11 @@ class FilterGMM(nn.Module):
 X=[]
 Y=[]
 def objective(trial):
-    mixture = trial.suggest_categorical("mixture", ["diagonal", "full", "isotropic", "shared"])
+    mixture = trial.suggest_categorical("mixture", ["diagonal", "full"])
     num_components = trial.suggest_int('num_components', 1, 5)
-    filter_size = trial.suggest_int('filter_size', 10, 100, step=10)
-    lag = trial.suggest_int('lag', 10, 100, step=10)
-    gKDR_pivot = 20
+    filter_size = trial.suggest_int('filter_size', 5, 50, log=True)
+    lag = trial.suggest_int('lag', 5, 50, log=True)
+    gKDR_pivot = trial.suggest_int('gKDR_pivot', 4, 10)
     gKDR_List = []
     input_size = 0
     for i in range(len(X)):
@@ -68,14 +68,14 @@ def objective(trial):
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
             input_size = input_size + val.shape[1]
             gKDR_List.append(val)
-            # Saving time, doing gKDR on too-low dimension is not reasonable. 
+            # Saving time, doing gKDR on too-low dimension is not reasonable.
             continue
 
-        K = trial.suggest_int('K_' + str(i), 1, X[i].shape[-1])
-        # Currently only single C. elegans data, not dealing with batch.  
+        K = gKDR_pivot
+        # Currently only single C. elegans data, not dealing with batch.
         if X[i].ndim == 2:
             val = gKDR(X[i][1:], Y[i][1:], K)(X[i][1:])
-            # Adding Past Observation. 
+            # Adding Past Observation.
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
             input_size = input_size + val.shape[1]
             gKDR_List.append(val)
@@ -89,7 +89,7 @@ def objective(trial):
     component_lr = 0.05
     num_iterations = 100
     log_freq = 5
-    ExpFilter_lr = 0.05
+    ExpFilter_lr = 0.05 # TODO: Larger learning rate causing NaN?
     ExpFilter_Gamma = trial.suggest_float("ExpFilter_Gamma", 0.1, 0.5)
     # create separate optimizers for mixture coeficients and components
     ExpFilter_optimizer = torch.optim.Adam(model.ExpFilter.parameters(), lr=ExpFilter_lr)
@@ -111,7 +111,7 @@ def objective(trial):
         output = model(mat)
         loss = 0
         for i in range(len(gKDR_List)):
-            loss = loss + output[i] 
+            loss = loss + output[i]
         trial.report(loss, iteration_index)
         if trial.should_prune():
             raise optuna.TrialPruned()

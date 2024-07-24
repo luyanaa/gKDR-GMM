@@ -21,22 +21,22 @@ def unique(seq): # Order preserving
   return [x for x in seq if x not in seen and not seen.add(x)]
 
 class FilterGMM(nn.Module):
-    def __init__(self, input_size, lag, filter_size, num_components: int,
-        X, y, mixture):
+    def __init__(self, input_size, num_components: int,
+        X, mixture):
         super().__init__()
         if mixture == "full":
-            self.GMM = [GmmFull(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
+            self.GMM = [GmmFull(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
         elif mixture == "diagonal":
-            self.GMM = [GmmDiagonal(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
+            self.GMM = [GmmDiagonal(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
         elif mixture == "isotropic":
-            self.GMM = [GmmIsotropic(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
+            self.GMM = [GmmIsotropic(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
         elif mixture == "shared":
-            self.GMM = [GmmSharedIsotropic(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
+            self.GMM = [GmmSharedIsotropic(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
     def forward(self, X):
         # Feed input of GMM one-by-one.
-        for i in range(len(self.shape)):
-            nll_loss = self.GMM[i](X[:, cnt:cnt+self.shape[i]].squeeze(0).transpose(0,1))
-            cnt = cnt+self.shape[i]
+        y = []
+        for i in range(len(X)):
+            nll_loss = self.GMM[i](X[i].transpose(0,1))
             y.append(nll_loss)
         return y
 
@@ -50,19 +50,11 @@ def objective(trial):
     input_size = 0
     for i in range(len(X)):
         K = trial.suggest_int('K_' + str(i), 1, X[i].shape[-1])
-        # Currently only single C. elegans data, not dealing with batch.  
+        # Currently only single C. elegans data, not dealing with batch.
         if X[i].ndim == 2:
-            val = gKDR(X[i][1:], Y[i][1:], K)(X[i][1:])
-            # Adding Past Observation. 
-            val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
-            input_size = input_size + val.shape[1]
+            val = gKDR(X[i], Y[i], K)(X[i][1:])
             gKDR_List.append(val)
-    mat = torch.zeros((gKDR_List[0].shape[0], input_size))
-    cnt = 0
-    for i in range(len(gKDR_List)):
-        mat[:, cnt:cnt+gKDR_List[i].shape[1]] = gKDR_List[i]
-        cnt = cnt + gKDR_List[i].shape[1]
-    model = FilterGMM(input_size=input_size, lag = lag, filter_size=filter_size, num_components=num_components, X=gKDR_List, y=Y, mixture=mixture)
+    model = FilterGMM(num_components=num_components, X=gKDR_List, mixture=mixture)
     mixture_lr = 0.05
     component_lr = 0.05
     num_iterations = 100

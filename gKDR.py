@@ -38,8 +38,9 @@ class gKDR(nn.Module):
         Ky = torch.exp(-0.5 * squareform(pdist(Y, p=2)) / SGY2)
 
         regularized_Kx = Kx + N*EPS*I
-        tmp = Ky * torch.linalg.inv(regularized_Kx)
-        F = (tmp.T * torch.linalg.inv(regularized_Kx)).T
+        L = torch.linalg.cholesky(regularized_Kx)
+        tmp = Ky * torch.cholesky_inverse(L)
+        F = (tmp.T * torch.cholesky_inverse(L)).T
 
         Dx = torch.clone(reshape_fortran(torch.tile(X,(N,1)), (N,N,M)))
         Xij = Dx - torch.transpose(Dx, 1,0)
@@ -63,6 +64,6 @@ class gKDR(nn.Module):
         self.Y_scale = Y_scale
         self.K = K
         self.B = V[:, idx]
-    
+
     def forward(self, X):
         return X @ self.B[:,0:self.K]
