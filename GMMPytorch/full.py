@@ -70,14 +70,15 @@ class GmmFull(MixtureModel):
         self.scale_tril = torch.nn.Parameter(make_random_scale_trils(num_components, num_dims))
     
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         mixture = Categorical(logits=self.logits)
         components = MultivariateNormal(self.mus, scale_tril=self.scale_tril)
         mixture_model = MixtureSameFamily(mixture, components)
 
-        nll_loss = -1 * mixture_model.log_prob(x).mean()
+        # nll_loss = -1 * mixture_model.log_prob(x).mean()
 
-        return nll_loss
+        # return nll_loss
+        return mixture_model
     
     
     def constrain_parameters(self, epsilon: float = 1e-6):

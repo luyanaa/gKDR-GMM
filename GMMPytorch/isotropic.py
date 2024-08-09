@@ -40,14 +40,15 @@ class GmmIsotropic(MixtureModel):
         self.sigmas = torch.nn.Parameter(torch.rand(num_components,))
 
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         mixture = Categorical(logits=self.logits)
         components = Independent(Normal(self.mus, self.sigmas.unsqueeze(1)), 1)
         mixture_model = MixtureSameFamily(mixture, components)
+        return mixture_model
 
-        nll_loss = -1 * mixture_model.log_prob(x).mean()
+        # nll_loss = -1 * mixture_model.log_prob(x).mean()
 
-        return nll_loss
+        # return nll_loss
 
 
     def constrain_parameters(self, epsilon: float = 1e-6):

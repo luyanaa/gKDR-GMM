@@ -44,10 +44,10 @@ class GmmDiagonal(MixtureModel):
         mixture = Categorical(logits=self.logits)
         components = Independent(Normal(self.mus, self.sigmas_diag), 1)
         mixture_model = MixtureSameFamily(mixture, components)
+        return mixture_model
+        # nll_loss = -1 * mixture_model.log_prob(x).mean()
 
-        nll_loss = -1 * mixture_model.log_prob(x).mean()
-
-        return nll_loss
+        # return nll_loss
 
 
     def constrain_parameters(self, epsilon: float = 1e-6):

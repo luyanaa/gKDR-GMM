@@ -47,14 +47,15 @@ class FilterGMM(nn.Module):
         cnt = 0
         y = []
         for i in range(len(self.shape)):
-            nll_loss = self.GMM[i](X[:, cnt:cnt+self.shape[i]].squeeze(0).transpose(0,1))
+            mixture_model = self.GMM[i](X[:, cnt:cnt+self.shape[i]].squeeze(0).transpose(0,1))
+            nll_loss = -1 * mixture_model.log_prob(X[:, cnt:cnt+self.shape[i]].squeeze(0).transpose(0,1)).mean()
             cnt = cnt+self.shape[i]
             y.append(nll_loss)
         return y
 
 X=[]
 Y=[]
-def objective(trial):
+def objective(trial, free_run=False):
     mixture = trial.suggest_categorical("mixture", ["diagonal", "full"])
     num_components = trial.suggest_int('num_components', 1, 5)
     filter_size = trial.suggest_int('filter_size', 5, 50, log=True)
@@ -68,17 +69,29 @@ def objective(trial):
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
             input_size = input_size + val.shape[1]
             gKDR_List.append(val)
+            if free_run:
+                val_test = X_test[i][1:]
+                val_test = torch.hstack((val_test, Y_test[i][:-1].unsqueeze(1), Y_test[i][1:].unsqueeze(1)))
+                input_size_test = input_size_test + val_test.shape[1]
+                gKDR_List_test.append(val_test)
             # Saving time, doing gKDR on too-low dimension is not reasonable.
             continue
 
         K = gKDR_pivot
         # Currently only single C. elegans data, not dealing with batch.
         if X[i].ndim == 2:
-            val = gKDR(X[i][1:], Y[i][1:], K)(X[i][1:])
+            reducion = gKDR(X[i][1:], Y[i][1:], K)
+            val = reduction(X[i][1:])
             # Adding Past Observation.
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
             input_size = input_size + val.shape[1]
             gKDR_List.append(val)
+            if free_run:
+                val_test = reduction(X_test[i][1:])
+                val_test = torch.hstack((val_test, Y_test[i][:-1].unsqueeze(1), Y_test[i][1:].unsqueeze(1)))
+                input_size_test = input_size_test + val_test.shape[1]
+                gKDR_List_test.append(val_test)
+            
     mat = torch.zeros((gKDR_List[0].shape[0], input_size))
     cnt = 0
     for i in range(len(gKDR_List)):
@@ -130,8 +143,25 @@ def objective(trial):
             ExpFilter_optimizer.step()
             ExpFilter_scheduler.step()
             model.GMM[i].constrain_parameters()
-
-    return loss.detach()
+    
+    if free_run:
+        # Testing Mode
+        with torch.no_grad():
+            # We still needs to filter the signal in inference mode. 
+            X = model.ExpFilter(X, model.Yt)
+            cnt = 0
+            y = []
+            for i in range(len(self.shape)):
+                mixture_model = model[i]
+                # Get mean log probability for each neuron over time. 
+                log_prob = mixture_model.log_prob(X[:, cnt:cnt+model.shape[i]].squeeze(0).transpose(0,1)).mean()
+                log_prob_GMM.append(log_prob)
+        # Print log_prob for each neuron. 
+        print(log_prob_GMM)
+            
+    # Training Objective
+    else:
+        return loss.detach()
 
 def generatesalt(n, startframe, period):
     x = numpy.arange(1, n+1, 1) - startframe
@@ -234,6 +264,7 @@ for sampleID in range(1, 2):
                                 pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=100, reduction_factor=3)
                             )
     study.optimize(objective, n_trials=500)
+    objective(study.best_trial)
 
 # Redirect output back to stdout
 sys.stdout = orig_stdout
