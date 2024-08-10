@@ -60,7 +60,7 @@ def objective(trial, free_run=False):
     num_components = trial.suggest_int('num_components', 1, 5)
     filter_size = trial.suggest_int('filter_size', 5, 50, log=True)
     lag = trial.suggest_int('lag', 5, 50, log=True)
-    gKDR_pivot = trial.suggest_int('gKDR_pivot', 4, 10)
+    gKDR_pivot = trial.suggest_int('gKDR_pivot', 3, 10)
     gKDR_List = []
     input_size = 0
     for i in range(len(X)):

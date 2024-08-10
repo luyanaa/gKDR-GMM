@@ -21,35 +21,45 @@ def unique(seq): # Order preserving
   return [x for x in seq if x not in seen and not seen.add(x)]
 
 class FilterGMM(nn.Module):
-    def __init__(self, input_size, num_components: int,
+    def __init__(self, num_components: int,
         X, mixture):
         super().__init__()
+        self.shape = [X[i].shape[1] for i in range(len(X))]
+        cnt = 0
         if mixture == "full":
-            self.GMM = [GmmFull(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
+            self.GMM = [GmmFull(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
         elif mixture == "diagonal":
-            self.GMM = [GmmDiagonal(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
+            self.GMM = [GmmDiagonal(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
         elif mixture == "isotropic":
-            self.GMM = [GmmIsotropic(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
+            self.GMM = [GmmIsotropic(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
         elif mixture == "shared":
-            self.GMM = [GmmSharedIsotropic(num_components=num_components, num_dims=X[i].shape) for i in range(len(X))]
+            self.GMM = [GmmSharedIsotropic(num_components=num_components, num_dims=self.shape[i]) for i in range(len(X))]
     def forward(self, X):
-        # Feed input of GMM one-by-one.
+        # Remember shape of list X for GMM input.
+        cnt = 0
         y = []
+<<<<<<< Updated upstream
         for i in range(len(X)):
             mixture_model = self.GMM[i](X[i].transpose(0,1))
             nll_loss = -1 * mixture_model.log_prob(X[i].transpose(0,1))
+=======
+        for i in range(len(self.shape)):
+            nll_loss = self.GMM[i](X[i])
+            cnt = cnt+self.shape[i]
+>>>>>>> Stashed changes
             y.append(nll_loss)
         return y
 
 X=[]
 Y=[]
 def objective(trial):
-    mixture = trial.suggest_categorical("mixture", ["diagonal", "full", "isotropic", "shared"])
+    mixture = trial.suggest_categorical("mixture", ["diagonal", "full"])
     num_components = trial.suggest_int('num_components', 1, 5)
-    gKDR_pivot = 20
+    gKDR_pivot = trial.suggest_int('gKDR_pivot', 3, 10)
     gKDR_List = []
     input_size = 0
     for i in range(len(X)):
+<<<<<<< Updated upstream
         reducion = gKDR(X[i][1:], Y[i][1:], K)
         val = reduction(X[i][1:])
         # Adding Past Observation.
@@ -61,6 +71,26 @@ def objective(trial):
             val_test = torch.hstack((val_test, Y_test[i][:-1].unsqueeze(1), Y_test[i][1:].unsqueeze(1)))
                 input_size_test = input_size_test + val_test.shape[1]
                 gKDR_List_test.append(val_test)
+=======
+        if X[i].shape[-1] <= gKDR_pivot:
+            val = X[i][1:]
+            val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
+            input_size = input_size + val.shape[1]
+            gKDR_List.append(val)
+            # Saving time, doing gKDR on too-low dimension is not reasonable.
+            continue
+
+        K = gKDR_pivot
+        # Currently only single C. elegans data, not dealing with batch.
+        if X[i].ndim == 2:
+            val = gKDR(X[i][1:], Y[i][1:], K)(X[i][1:])
+            # Adding Past Observation.
+            val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
+            input_size = input_size + val.shape[1]
+            gKDR_List.append(val)
+    mat = torch.zeros((gKDR_List[0].shape[0], input_size))
+    cnt = 0
+>>>>>>> Stashed changes
     model = FilterGMM(num_components=num_components, X=gKDR_List, mixture=mixture)
     mixture_lr = 0.05
     component_lr = 0.05
@@ -83,11 +113,16 @@ def objective(trial):
         output = model(gKDR_List)
         loss = 0
         for i in range(len(gKDR_List)):
-            loss = loss + output[i] 
+            loss = loss + output[i]
         trial.report(loss, iteration_index)
         if trial.should_prune():
             raise optuna.TrialPruned()
+
         loss.backward()
+
+        # log and visualize
+        # if log_freq is not None and iteration_index % log_freq == 0:
+        #    print(f"Iteration: {iteration_index:2d}, Loss: {loss.item():.2f}")
 
         for i in range(len(gKDR_List)):
             mixture_optimizer[i].step()
@@ -110,37 +145,6 @@ def objective(trial):
         print(log_prob_GMM)
             
     return loss.detach()
-def embed4D(source_data, target_data, train_span, test_span, embed_step, embed_before, time_step, nahead):
-    embed_size = embed_before + 1
-    M = source_data.shape[1] # number of time series used for source signal
-    # set embedded data: source_train, target_train
-    # columns for source_train: data1(t-embed_before*embed_step),,,,,, data1(t),data2(t-embed_before*embed_step),,,,,, data2(t),
-    start_ind = train_span[0] + embed_before * embed_step
-    end_ind = train_span[1] - nahead
-    ind_seq = numpy.arange(start=start_ind, stop=end_ind, step=time_step) # sequence of time indices to pick up for training
-    source_train = numpy.zeros((ind_seq.shape[0], embed_size*M))
-    source_train[:,:] = numpy.nan
-    columns = numpy.arange(start=0, step=embed_size, stop=(1+embed_size*(M-1)))
-    for shift in range((-embed_before)*embed_step, embed_step, embed_step):
-        source_train[:, columns] = source_data[ind_seq + shift, :]   # from old to new
-        columns = columns + 1 # add to each column number
-    target_train = target_data[ind_seq+nahead,:]
-    if test_span.shape[0] < 2:
-        source_test = []
-        target_test = []
-    else:
-        start_ind = test_span[0] + embed_before * embed_step
-        end_ind = test_span[1] - nahead;
-        ind_seq = numpy.arange(start=start_ind,stop=end_ind+time_step, step=time_step) # sequence of time indices to pick up
-        source_test = numpy.zeros((ind_seq.shape[0], embed_size*M))
-        source_test[:,:] = numpy.nan
-                columns = numpy.arange(start=1, step=embed_size, stop=(1+embed_size*(M)))
-        # embed
-        for shift in range((-embed_before*embed_step), embed_step , embed_step):
-            source_test[:, columns] = source_data[ind_seq + shift, :]
-            columns = columns + 1
-        target_test = target_data[ind_seq+nahead,:]
-    return source_train, target_train, source_test, target_test
 
 def generatesalt(n, startframe, period):
     x = numpy.arange(1, n+1, 1) - startframe
@@ -200,7 +204,6 @@ for sampleID in range(1, 2):
         sourcedata = [saltdata[1:n].transpose(0,1), data[:,targetcells]]
     else:
         sourcedata = data[:,targetcells]
-    source_train_all, target_train_all, _, _ = embed4D(sourcedata, data[:,targetcells], train_span, test_span, embed_step, embed_before, time_step, nahead)
     for targeti in range(targetcells.shape[0]):
         targetcellname = targetcellnames[targeti]
         cellc = numpy.where(conNames == targetcellname )[0]
@@ -236,13 +239,8 @@ for sampleID in range(1, 2):
             sourcecellnames = [sourcecellnames[0], 'salt', sourcecellnames[1:-1]]
             seli = numpy.array(seli)
         seli = seli.flatten()
-        target_train = target_train_all[:,targeti]
-        cols = numpy.reshape(numpy.repeat((1-selistart+seli-1)*embed_size, 
-                                          repeats=embed_size, axis=0) + numpy.repeat(numpy.arange(start=1,stop=embed_size+1,step=1),
-                                                                                     repeats=len(seli), axis=0),[-1,1]).transpose()
-        source_train = source_train_all[:, cols]
-        source_train = source_train.squeeze(1)
-        target_train = numpy.expand_dims(target_train, 1)
+        target_train = data[:,targeti]
+        source_train = data[:,seli]
         Y.append(torch.from_numpy(target_train))
         X.append(torch.from_numpy(source_train))
     study = optuna.create_study(sampler=optuna.samplers.TPESampler(), 
