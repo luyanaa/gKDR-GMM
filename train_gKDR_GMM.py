@@ -36,7 +36,8 @@ class FilterGMM(nn.Module):
         # Feed input of GMM one-by-one.
         y = []
         for i in range(len(X)):
-            nll_loss = self.GMM[i](X[i].transpose(0,1))
+            mixture_model = self.GMM[i](X[i].transpose(0,1))
+            nll_loss = -1 * mixture_model.log_prob(X[i].transpose(0,1))
             y.append(nll_loss)
         return y
 
@@ -49,11 +50,17 @@ def objective(trial):
     gKDR_List = []
     input_size = 0
     for i in range(len(X)):
-        K = trial.suggest_int('K_' + str(i), 1, X[i].shape[-1])
-        # Currently only single C. elegans data, not dealing with batch.
-        if X[i].ndim == 2:
-            val = gKDR(X[i], Y[i], K)(X[i][1:])
-            gKDR_List.append(val)
+        reducion = gKDR(X[i][1:], Y[i][1:], K)
+        val = reduction(X[i][1:])
+        # Adding Past Observation.
+        val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
+        input_size = input_size + val.shape[1]
+        gKDR_List.append(val)
+        if free_run:
+            val_test = reduction(X_test[i][1:])
+            val_test = torch.hstack((val_test, Y_test[i][:-1].unsqueeze(1), Y_test[i][1:].unsqueeze(1)))
+                input_size_test = input_size_test + val_test.shape[1]
+                gKDR_List_test.append(val_test)
     model = FilterGMM(num_components=num_components, X=gKDR_List, mixture=mixture)
     mixture_lr = 0.05
     component_lr = 0.05
@@ -88,7 +95,20 @@ def objective(trial):
             components_optimizer[i].step()
             components_scheduler[i].step()
             model.GMM[i].constrain_parameters()
-
+    if free_run:
+        # Testing Mode
+        with torch.no_grad():
+            # We still needs to filter the signal in inference mode. 
+            cnt = 0
+            y = []
+            for i in range(len(self.shape)):
+                mixture_model = model[i]
+                # Get mean log probability for each neuron over time. 
+                log_prob = mixture_model.log_prob(X[i].transpose(0,1)).mean()
+                log_prob_GMM.append(log_prob)
+        # Print log_prob for each neuron. 
+        print(log_prob_GMM)
+            
     return loss.detach()
 def embed4D(source_data, target_data, train_span, test_span, embed_step, embed_before, time_step, nahead):
     embed_size = embed_before + 1
@@ -229,6 +249,7 @@ for sampleID in range(1, 2):
                                 pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=100, reduction_factor=3)
                             )
     study.optimize(objective, n_trials=500)
+    objective(study.best_trial)
 
 # Redirect output back to stdout
 sys.stdout = orig_stdout
