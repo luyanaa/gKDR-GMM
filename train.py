@@ -53,7 +53,10 @@ class FilterGMM(nn.Module):
             y.append(nll_loss)
         return y
 
-def objective(trial, free_run, X, Y):
+X = []
+Y = []
+free_run = False
+def objective(trial):
     mixture = trial.suggest_categorical("mixture", ["diagonal", "full"])
     num_components = trial.suggest_int('num_components', 1, 5)
     filter_size = trial.suggest_int('filter_size', 5, 50, log=True)
@@ -220,8 +223,6 @@ for sampleID in range(1, 2):
         sourcedata = [saltdata[1:n].transpose(0,1), data[:,targetcells]]
     else:
         sourcedata = data[:,targetcells]
-    X = []
-    Y = []
     for targeti in range(targetcells.shape[0]):
         targetcellname = targetcellnames[targeti]
         cellc = numpy.where(conNames == targetcellname )[0]
@@ -261,10 +262,9 @@ for sampleID in range(1, 2):
         source_train = data[:,seli]
         Y.append(torch.from_numpy(target_train))
         X.append(torch.from_numpy(source_train))
-    def func(trial, free_run=False):
-        return objective(trial, free_run, X, Y)
     study = optuna.create_study(sampler=optuna.samplers.TPESampler(), 
                                 pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=100, reduction_factor=3)
                             )
-    study.optimize(func, n_trials=500)
-    func(study.best_trial, free_run=True)
+    study.optimize(objective, n_trials=500)
+    free_run = True
+    objective(study.best_trial)
