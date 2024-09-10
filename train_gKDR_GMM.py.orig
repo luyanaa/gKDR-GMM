@@ -38,21 +38,40 @@ class FilterGMM(nn.Module):
         # Remember shape of list X for GMM input.
         cnt = 0
         y = []
+<<<<<<< Updated upstream
+        for i in range(len(X)):
+            mixture_model = self.GMM[i](X[i].transpose(0,1))
+            nll_loss = -1 * mixture_model.log_prob(X[i].transpose(0,1))
+=======
         for i in range(len(self.shape)):
             nll_loss = self.GMM[i](X[i])
             cnt = cnt+self.shape[i]
+>>>>>>> Stashed changes
             y.append(nll_loss)
         return y
 
 X=[]
 Y=[]
-def objective(trial, free_run, X, Y):
+def objective(trial):
     mixture = trial.suggest_categorical("mixture", ["diagonal", "full"])
     num_components = trial.suggest_int('num_components', 1, 5)
     gKDR_pivot = trial.suggest_int('gKDR_pivot', 3, 10)
     gKDR_List = []
     input_size = 0
     for i in range(len(X)):
+<<<<<<< Updated upstream
+        reducion = gKDR(X[i][1:], Y[i][1:], K)
+        val = reduction(X[i][1:])
+        # Adding Past Observation.
+        val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
+        input_size = input_size + val.shape[1]
+        gKDR_List.append(val)
+        if free_run:
+            val_test = reduction(X_test[i][1:])
+            val_test = torch.hstack((val_test, Y_test[i][:-1].unsqueeze(1), Y_test[i][1:].unsqueeze(1)))
+                input_size_test = input_size_test + val_test.shape[1]
+                gKDR_List_test.append(val_test)
+=======
         if X[i].shape[-1] <= gKDR_pivot:
             val = X[i][1:]
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
@@ -64,18 +83,11 @@ def objective(trial, free_run, X, Y):
         K = gKDR_pivot
         # Currently only single C. elegans data, not dealing with batch.
         if X[i].ndim == 2:
-            reducion = gKDR(X[i][1:], Y[i][1:], K)
-            val = reduction(X[i][1:])
+            val = gKDR(X[i][1:], Y[i][1:], K)(X[i][1:])
             # Adding Past Observation.
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
             input_size = input_size + val.shape[1]
             gKDR_List.append(val)
-            
-            if free_run:
-                val_test = reduction(X_test[i][1:])
-                val_test = torch.hstack((val_test, Y_test[i][:-1].unsqueeze(1), Y_test[i][1:].unsqueeze(1)))
-                    input_size_test = input_size_test + val_test.shape[1]
-                    gKDR_List_test.append(val_test)
     mat = torch.zeros((gKDR_List[0].shape[0], input_size))
     cnt = 0
 >>>>>>> Stashed changes

@@ -53,15 +53,14 @@ class FilterGMM(nn.Module):
             y.append(nll_loss)
         return y
 
-X=[]
-Y=[]
-def objective(trial, free_run=False):
+def objective(trial, free_run, X, Y):
     mixture = trial.suggest_categorical("mixture", ["diagonal", "full"])
     num_components = trial.suggest_int('num_components', 1, 5)
     filter_size = trial.suggest_int('filter_size', 5, 50, log=True)
     lag = trial.suggest_int('lag', 5, 50, log=True)
-    gKDR_pivot = trial.suggest_int('gKDR_pivot', 3, 10)
+    gKDR_pivot = trial.suggest_int('gKDR_pivot', 4, 10)
     gKDR_List = []
+    gKDR_List_test = []
     input_size = 0
     for i in range(len(X)):
         if X[i].shape[-1] <= gKDR_pivot:
@@ -80,7 +79,7 @@ def objective(trial, free_run=False):
         K = gKDR_pivot
         # Currently only single C. elegans data, not dealing with batch.
         if X[i].ndim == 2:
-            reducion = gKDR(X[i][1:], Y[i][1:], K)
+            reduction = gKDR(X[i][1:], Y[i][1:], K)
             val = reduction(X[i][1:])
             # Adding Past Observation.
             val = torch.hstack((val, Y[i][:-1].unsqueeze(1), Y[i][1:].unsqueeze(1)))
@@ -221,6 +220,8 @@ for sampleID in range(1, 2):
         sourcedata = [saltdata[1:n].transpose(0,1), data[:,targetcells]]
     else:
         sourcedata = data[:,targetcells]
+    X = []
+    Y = []
     for targeti in range(targetcells.shape[0]):
         targetcellname = targetcellnames[targeti]
         cellc = numpy.where(conNames == targetcellname )[0]
@@ -260,14 +261,10 @@ for sampleID in range(1, 2):
         source_train = data[:,seli]
         Y.append(torch.from_numpy(target_train))
         X.append(torch.from_numpy(source_train))
+    def func(trial, free_run=False):
+        return objective(trial, free_run, X, Y)
     study = optuna.create_study(sampler=optuna.samplers.TPESampler(), 
                                 pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=100, reduction_factor=3)
                             )
-    study.optimize(objective, n_trials=500)
-    objective(study.best_trial)
-
-# Redirect output back to stdout
-sys.stdout = orig_stdout
-f.close()
-
-
+    study.optimize(func, n_trials=500)
+    func(study.best_trial, free_run=True)
